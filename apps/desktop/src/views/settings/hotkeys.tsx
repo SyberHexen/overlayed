@@ -230,7 +230,29 @@ export const Hotkeys = () => {
   return (
     <div className="flex flex-col gap-2 text-sm" data-hotkeys-panel>
       <p className="text-xs text-zinc-400">The next-monitor hotkey only works with Fixed position.</p>
-      {status?.supported === false && <p className="text-xs text-zinc-400">Global hotkeys don't work on Wayland.</p>}
+      {status?.supported === false && (
+        <p className="text-xs text-zinc-400">
+          Global hotkeys on Wayland need a desktop with the global shortcuts portal (KDE Plasma, GNOME 48+, Hyprland).
+        </p>
+      )}
+      {status?.portal && (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-zinc-400">Your desktop confirms these keys and may change them.</p>
+          {status.configurable && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 text-xs px-2"
+              onClick={() =>
+                invoke("configure_hotkeys").catch(error => console.warn("Could not open the desktop's settings", error))
+              }
+            >
+              Change in desktop settings
+            </Button>
+          )}
+        </div>
+      )}
       {commands.map(({ command, label }) => {
         const binding = bindings.find(binding => binding.command === command);
         const result = status?.bindings.find(result => result.command === command && result.key === binding?.key);
@@ -246,6 +268,11 @@ export const Hotkeys = () => {
                 <p className="truncate text-xs text-zinc-400" title={binding?.key}>
                   {bindingLabel(active, binding, macos)}
                 </p>
+                {status?.portal && result?.trigger && !active && (
+                  <p className="truncate text-xs text-zinc-500" title={result.trigger}>
+                    Desktop: {result.trigger}
+                  </p>
+                )}
               </div>
               <div className="flex shrink-0 gap-1">
                 <Button

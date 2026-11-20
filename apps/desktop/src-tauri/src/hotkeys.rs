@@ -26,8 +26,8 @@ pub enum HotkeyCommand {
 
 #[derive(Clone, Deserialize)]
 pub struct Binding {
-  key: String,
-  command: HotkeyCommand,
+  pub(crate) key: String,
+  pub(crate) command: HotkeyCommand,
 }
 
 #[derive(Clone, Serialize)]
@@ -36,6 +36,27 @@ pub struct BindingResult {
   command: HotkeyCommand,
   ok: bool,
   error: Option<String>,
+  /// what the desktop assigned, when hotkeys go through the portal
+  #[serde(skip_serializing_if = "Option::is_none")]
+  trigger: Option<String>,
+}
+
+impl BindingResult {
+  #[cfg(target_os = "linux")]
+  pub(crate) fn portal(
+    binding: &Binding,
+    ok: bool,
+    error: Option<String>,
+    trigger: Option<String>,
+  ) -> Self {
+    Self {
+      key: binding.key.clone(),
+      command: binding.command,
+      ok,
+      error,
+      trigger,
+    }
+  }
 }
 
 #[derive(Clone, Serialize)]
@@ -43,6 +64,10 @@ pub struct HotkeysStatus {
   bindings: Vec<BindingResult>,
   supported: bool,
   suspended: bool,
+  /// the hotkeys go through the desktop portal (Wayland)
+  portal: bool,
+  /// the desktop's own shortcut settings can be opened (portal version 2)
+  configurable: bool,
 }
 
 #[derive(Default)]
@@ -113,7 +138,39 @@ fn status(state: &HotkeysState, registrations: &Registrations) -> HotkeysStatus 
     bindings: registrations.results.clone(),
     supported: supported(),
     suspended: state.suspended.load(Ordering::Acquire),
+    portal: false,
+    configurable: false,
   }
+}
+
+impl HotkeysState {
+  pub fn is_suspended(&self) -> bool {
+    self.suspended.load(Ordering::Acquire)
+  }
+}
+
+/// The status of hotkeys bound through the desktop portal (Wayland)
+#[cfg(target_os = "linux")]
+fn portal_status(app: &AppHandle, state: &HotkeysState, bindings: &[Binding]) -> HotkeysStatus {
+  HotkeysStatus {
+    bindings: crate::portal_hotkeys::results(app, bindings),
+    supported: true,
+    suspended: state.is_suspended(),
+    portal: true,
+    configurable: crate::portal_hotkeys::can_configure(app),
+  }
+}
+
+/// Publishes the current status again (the desktop changed the portal
+/// shortcuts)
+#[cfg(target_os = "linux")]
+pub(crate) fn republish(app: &AppHandle) {
+  let state = app.state::<HotkeysState>();
+  let bindings = match state.registrations.lock() {
+    Ok(registrations) => registrations.bindings.clone(),
+    Err(_) => return,
+  };
+  publish(app, &portal_status(app, &state, &bindings));
 }
 
 fn publish(app: &AppHandle, status: &HotkeysStatus) {
@@ -176,6 +233,7 @@ fn reconcile_registrations(
         command: binding.command,
         ok: result.is_ok(),
         error: result.err(),
+        trigger: None,
       }
     })
     .collect();
@@ -225,6 +283,23 @@ pub async fn set_hotkeys(
   if window.label() != MAIN_WINDOW_NAME {
     return Err("Only the overlay window registers hotkeys".to_string());
   }
+
+  // Wayland: through the desktop's GlobalShortcuts portal, if it has one
+  #[cfg(target_os = "linux")]
+  if !supported() {
+    let app = window.app_handle();
+    state
+      .registrations
+      .lock()
+      .map_err(|error| error.to_string())?
+      .bindings = bindings.clone();
+    if crate::portal_hotkeys::apply(app, &bindings).await {
+      let status = portal_status(app, &state, &bindings);
+      publish(app, &status);
+      return Ok(status);
+    }
+  }
+
   let mut registrations = state
     .registrations
     .lock()
@@ -238,7 +313,22 @@ pub async fn set_hotkeys(
 }
 
 #[tauri::command]
-pub async fn get_hotkeys(state: State<'_, HotkeysState>) -> Result<HotkeysStatus, String> {
+pub async fn get_hotkeys(
+  app: AppHandle,
+  state: State<'_, HotkeysState>,
+) -> Result<HotkeysStatus, String> {
+  #[cfg(target_os = "linux")]
+  if crate::portal_hotkeys::in_use(&app) {
+    let bindings = state
+      .registrations
+      .lock()
+      .map_err(|error| error.to_string())?
+      .bindings
+      .clone();
+    return Ok(portal_status(&app, &state, &bindings));
+  }
+  #[cfg(not(target_os = "linux"))]
+  let _ = &app;
   let registrations = state
     .registrations
     .lock()
@@ -257,6 +347,15 @@ pub async fn suspend_hotkeys(
     .lock()
     .map_err(|error| error.to_string())?;
   state.suspended.store(suspended, Ordering::Release);
+
+  // the portal keeps its keys; activations are ignored while suspended
+  #[cfg(target_os = "linux")]
+  if crate::portal_hotkeys::in_use(&app) {
+    let status = portal_status(&app, &state, &registrations.bindings);
+    publish(&app, &status);
+    return Ok(status);
+  }
+
   let status = replace_registrations(&app, &state, &mut registrations);
   if suspended && !registrations.registered.is_empty() {
     return Err("Couldn't suspend previous hotkeys. Try again.".to_string());
@@ -264,7 +363,7 @@ pub async fn suspend_hotkeys(
   Ok(status)
 }
 
-fn run_action(app: &AppHandle, command: HotkeyCommand) {
+pub(crate) fn run_action(app: &AppHandle, command: HotkeyCommand) {
   let result = match command {
     HotkeyCommand::Pin => toggle_overlay_pin(app),
     HotkeyCommand::OpenSettings => {
@@ -404,6 +503,18 @@ fn accelerator(key: &RecordedKey) -> Result<String, String> {
   let value = parts.join("+");
   parse_binding(&value)?;
   Ok(value)
+}
+
+/// Opens the desktop's own settings for Overlayed's shortcuts (portal)
+#[tauri::command]
+pub async fn configure_hotkeys(app: AppHandle) -> Result<(), String> {
+  #[cfg(target_os = "linux")]
+  return crate::portal_hotkeys::configure(&app).await;
+  #[cfg(not(target_os = "linux"))]
+  {
+    let _ = app;
+    Err("Only for the desktop portal".to_string())
+  }
 }
 
 #[tauri::command]

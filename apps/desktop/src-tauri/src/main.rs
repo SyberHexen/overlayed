@@ -9,6 +9,8 @@ mod commands;
 mod constants;
 mod hotkeys;
 mod placement;
+#[cfg(target_os = "linux")]
+mod portal_hotkeys;
 mod tray;
 mod window_custom;
 
@@ -126,6 +128,11 @@ fn main() {
     app = app.plugin(tauri_nspanel::init());
   }
 
+  #[cfg(target_os = "linux")]
+  {
+    app = app.manage(portal_hotkeys::PortalHotkeys::default());
+  }
+
   app = app
     .manage(Pinned(AtomicBool::new(false)))
     .manage(HideTaskbarWhenPinned(AtomicBool::new(false)))
@@ -194,6 +201,7 @@ fn main() {
       hotkeys::get_hotkeys,
       hotkeys::suspend_hotkeys,
       hotkeys::record_hotkey,
+      hotkeys::configure_hotkeys,
       hotkeys::set_overlay_visible,
     ]);
 

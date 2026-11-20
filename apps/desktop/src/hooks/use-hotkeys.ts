@@ -10,12 +10,18 @@ import type { PlacementMonitors } from "./use-placement";
 export interface HotkeyResult extends HotkeyBinding {
   ok: boolean;
   error: string | null;
+  /** What the desktop assigned, when hotkeys go through the portal (Wayland) */
+  trigger?: string;
 }
 
 export interface HotkeysStatus {
   bindings: HotkeyResult[];
   supported: boolean;
   suspended: boolean;
+  /** Hotkeys go through the desktop's GlobalShortcuts portal (Wayland) */
+  portal: boolean;
+  /** The desktop's own shortcut settings can be opened */
+  configurable: boolean;
 }
 
 const mainWindow = getCurrentWebviewWindow().label === "main";
