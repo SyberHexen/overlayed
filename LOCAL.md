@@ -8,6 +8,7 @@ get it up and running on your local machine. Below are the steps to follow for y
 - Rust
 - Node
 - pnpm
+- On Linux: [Tauri's prerequisites](https://v2.tauri.app/start/prerequisites/#linux) plus gtk-layer-shell (`libgtk-layer-shell-dev` on Debian/Ubuntu, `gtk-layer-shell` on Arch, `gtk-layer-shell-devel` on Fedora)
 
 ### 1. Fork & clone the repo
 
